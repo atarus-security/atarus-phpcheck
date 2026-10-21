@@ -1,0 +1,71 @@
+@@PHPCHECK 1
+@@HOST web-01
+@@BIN cli /usr/bin/php8.2
+@@V
+PHP Warning:  Module "json" is already loaded in Unknown on line 0
+PHP 8.2.28-1~deb12u1 (cli) (built: Mar 14 2025 12:00:00) (NTS)
+Copyright (c) The PHP Group
+@@INFO
+php.version=8.2.28-1~deb12u1
+php.sapi=cli
+php.ini_loaded=/etc/php/8.2/cli/php.ini
+ini.memory_limit=-1
+ini.post_max_size=8M
+ini.upload_max_filesize=2M
+ini.max_file_uploads=20
+ini.file_uploads=1
+ini.max_input_vars=1000
+ini.max_input_nesting_level=64
+ini.max_multipart_body_parts=-1
+ini.session.upload_progress.enabled=1
+ini.fatal_error_backtraces=(not present)
+@@END
+@@BIN fpm /usr/sbin/php-fpm8.2
+@@V
+PHP 8.2.28-1~deb12u1 (fpm-fcgi) (built: Mar 14 2025 12:00:00)
+@@INFO
+<tr><td class="e">PHP Version </td><td class="v">8.2.28-1~deb12u1 </td></tr>
+<tr><td class="e">Server API </td><td class="v">FPM/FastCGI </td></tr>
+<tr><td class="e">Loaded Configuration File </td><td class="v">/etc/php/8.2/fpm/php.ini </td></tr>
+<tr><td class="e">file_uploads</td><td class="v">Off</td><td class="v">Off</td></tr>
+<tr><td class="e">memory_limit</td><td class="v">256M</td><td class="v">256M</td></tr>
+<tr><td class="e">post_max_size</td><td class="v">16M</td><td class="v">16M</td></tr>
+<tr><td class="e">session.upload_progress.enabled</td><td class="v">Off</td><td class="v">Off</td></tr>
+@@END
+@@BIN cli /usr/bin/php7.4
+@@V
+PHP 7.4.33 (cli) (built: Nov  1 2022 00:00:00) ( NTS )
+@@INFO
+php.version=7.4.33
+php.sapi=cli
+ini.memory_limit=128M
+ini.file_uploads=1
+@@END
+@@MODULE /usr/lib/apache2/modules/libphp8.2.so
+X-Powered-By: PHP/8.2.28-1~deb12u1
+@@END
+@@SAPIINI apache2 8.2 /etc/php/8.2/apache2/php.ini
+@@INFO
+php.version=8.2.28-1~deb12u1
+php.sapi=cli
+ini.memory_limit=128M
+ini.file_uploads=1
+ini.session.upload_progress.enabled=1
+@@END
+@@APACHE_CONF /etc/apache2/mods-enabled/php8.2.load
+@@POOL /etc/php/8.2/fpm/php-fpm.conf
+[global]
+@@END
+@@POOL /etc/php/8.2/fpm/pool.d/www.conf
+[www]
+pm = dynamic
+pm.max_children = 5
+@@END
+@@POOL /etc/php/8.2/fpm/pool.d/api.conf
+[api]
+pm = static
+pm.max_requests = 500
+php_admin_value[memory_limit] = -1
+php_admin_flag[session.upload_progress.enabled] = off
+@@END
+@@DONE

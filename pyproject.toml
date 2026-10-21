@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "atarus-phpcheck"
+dynamic = ["version"]
+description = "Detection and inventory for PHP core CVE-2026-109618 and CVE-2026-109619"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Atarus Offensive Security", email = "info@atarussecurity.com" }]
+requires-python = ">=3.9"
+dependencies = []
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX",
+    "Topic :: Security",
+]
+
+[project.scripts]
+phpcheck = "phpcheck.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/atarus-security/atarus-phpcheck"
+
+[tool.setuptools]
+packages = ["phpcheck"]
+
+[tool.setuptools.dynamic]
+version = { attr = "phpcheck.__version__" }
