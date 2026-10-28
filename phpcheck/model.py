@@ -41,6 +41,17 @@ class Result:
         return asdict(self)
 
 
+@dataclass
+class RunInfo:
+    """How a remote or fleet run was authorised. Printed at the top of the
+    report and stored in the JSON document, so a result cannot be read
+    without seeing what was in scope and how the run was confirmed."""
+    scope: Optional[List[str]] = None
+    confirmation: Optional[str] = None
+    out_of_scope: List[dict] = field(default_factory=list)
+    refused: Optional[str] = None  # set when the gate did not open: nothing was sent
+
+
 def build_result(target: str, mode: str, version_text: Optional[str], *, sapi: str = "-",
                  path: Optional[str] = None, settings: Optional[Dict[str, str]] = None,
                  pools: Sequence[Pool] = (), confidence: Optional[str] = None,

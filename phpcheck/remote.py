@@ -19,11 +19,14 @@ from urllib.parse import urljoin, urlsplit
 
 from . import __version__
 from .model import Result, build_result
+from .scope import safe_text
 from .versions import assess
 
 USER_AGENT = "atarus-phpcheck/%s (passive PHP version check)" % __version__
 MAX_BODY = 64 * 1024
 MAX_REDIRECTS = 3
+# Header values are target-controlled; this is as much of one as a report keeps.
+MAX_HEADER_SHOWN = 300
 
 # Paths whose mere presence is worth reporting. Probed with HEAD only.
 LEAK_PATHS = ("/phpinfo.php", "/info.php", "/php_info.php", "/php-info.php")
@@ -72,12 +75,14 @@ def http_fetch(url: str, method: str, *, timeout: float = 10.0, insecure: bool =
         conn.request(method, path, headers={"User-Agent": user_agent, "Accept": "*/*", "Connection": "close"})
         resp = conn.getresponse()
         res.status = resp.status
-        res.headers = list(resp.getheaders())
+        # Header names and values come from the target: made safe before anything keeps them.
+        res.headers = [(safe_text(k, 100), safe_text(v, MAX_HEADER_SHOWN)) for k, v in resp.getheaders()]
         if method == "GET":
             resp.read(MAX_BODY)
         conn.close()
     except (OSError, http.client.HTTPException, ssl.SSLError, socket.timeout, ValueError) as e:
-        res.error = "%s: %s" % (type(e).__name__, e)
+        # Exception text can quote the target's bytes (BadStatusLine does), so it is made safe too.
+        res.error = safe_text("%s: %s" % (type(e).__name__, e), MAX_HEADER_SHOWN)
     return res
 
 
@@ -92,6 +97,7 @@ def analyze_headers(headers: Sequence[Tuple[str, str]]) -> HeaderAnalysis:
     """Look for PHP in X-Powered-By, Server and Set-Cookie."""
     out = HeaderAnalysis()
     for name, value in headers:
+        name, value = safe_text(name, 100), safe_text(value, MAX_HEADER_SHOWN)
         lname = name.lower()
         if lname in ("x-powered-by", "server"):
             found = _PHP_IN_HEADER_RE.findall(value)
@@ -155,9 +161,9 @@ def _request(fetch: Fetcher, pacer: Pacer, url: str, method: str, follow: bool,
         loc = next((v for k, v in resp.headers if k.lower() == "location"), None)
         if not loc:
             return resp
-        nxt = urljoin(url, loc)
+        nxt = urljoin(url, safe_text(loc, MAX_HEADER_SHOWN))
         if not _same_host(url, nxt):
-            log.append("%s %s redirects to another host, not followed: %s" % (method, url, nxt))
+            log.append("%s %s redirects to another host, not followed: %s" % (method, url, safe_text(nxt, MAX_HEADER_SHOWN)))
             return resp
         url = nxt
     return resp

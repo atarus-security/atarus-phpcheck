@@ -151,5 +151,44 @@ class Normalise(unittest.TestCase):
         self.assertEqual(normalise_target("http://example.test:8080/app"), ["http://example.test:8080/app"])
 
 
+class HostileHeaders(unittest.TestCase):
+    """Header values are target text: control characters never reach a result as they are."""
+
+    def test_escape_in_banner(self):
+        a = analyze_headers([("X-Powered-By", "PHP/8.2.28\x1b[2J\x1b]0;owned\x07"), ("Server", "nginx\r\nX-Fake: 1")])
+        self.assertEqual([v for v, _ in a.versions], ["8.2.28"])
+        joined = " | ".join(a.evidence) + " | ".join(w for _, w in a.versions)
+        self.assertNotIn("\x1b", joined)
+        self.assertNotIn("\r", joined)
+        self.assertIn("\\x1b[2J", joined)
+        self.assertIn("nginx X-Fake: 1", joined)
+
+    def test_long_header_is_cut(self):
+        a = analyze_headers([("Server", "A" * 1000)])
+        self.assertTrue(a.evidence[0].endswith("[cut]"))
+        self.assertLess(len(a.evidence[0]), 400)
+
+    def test_cookie_name_with_control_characters(self):
+        a = analyze_headers([("Set-Cookie", "PHPSESSID\x1b[2J=abc; path=/")])
+        self.assertFalse(a.php_present, "a cookie name with an escape in it is not a PHP session cookie")
+        a = analyze_headers([("Set-Cookie", "PHPSESSID=abc\x07; path=/")])
+        self.assertTrue(a.php_present)
+        self.assertNotIn("\x07", " ".join(a.evidence))
+
+    def test_redirect_location_is_made_safe(self):
+        responses = {
+            ("HEAD", "https://h.test"): HttpResponse("https://h.test", "HEAD", 302, [("Location", "https://evil.test/\x1b[2J")]),
+        }
+
+        def fetch(url, method):
+            return responses.get((method, url), HttpResponse(url, method, 200, [("X-Powered-By", "PHP/8.3.1")]))
+
+        r = check_target("https://h.test", fetch, Pacer(0, sleep=lambda s: None), probe_paths=False)
+        note = next(n for n in r.notes if "another host" in n)
+        self.assertNotIn("\x1b", note)
+        self.assertIn("evil.test/\\x1b[2J", note)
+        self.assertNotIn("\x1b", "\n".join(r.evidence + r.notes + r.findings))
+
+
 if __name__ == "__main__":
     unittest.main()

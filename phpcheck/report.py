@@ -8,10 +8,14 @@ from typing import Dict, List, Optional, Sequence
 
 from . import __version__
 from .advisories import ADVISORIES, EOL_NOTE, MITIGATION_CHECKLIST, VENDOR_NOTE
-from .model import NOT_FOUND, Result
+from .model import NOT_FOUND, Result, RunInfo
 from .remote import NO_BANNER_NOTE
+from .scope import safe_text
 from .settings import short_settings
 from .versions import EOL, FIXED, UNKNOWN, VULNERABLE, fix_table
+
+# Modes whose targets are other people's hosts: their reports carry the scope block.
+SCOPED_MODES = ("remote", "fleet")
 
 COLUMNS = (
     ("TARGET", "target"),
@@ -33,7 +37,7 @@ def summary(results: Sequence[Result]) -> Dict[str, int]:
 
 def _cell(r: Result, attr: str) -> str:
     v = getattr(r, attr)
-    return "-" if v in (None, "") else str(v)
+    return "-" if v in (None, "") else safe_text(v)
 
 
 def render_table(results: Sequence[Result]) -> str:
@@ -46,37 +50,59 @@ def render_table(results: Sequence[Result]) -> str:
 
 
 def render_details(results: Sequence[Result]) -> str:
+    # Every value here may have come from a target. The modes already clean
+    # what they collect; this is the last line of defence before the terminal.
+    s = safe_text
     out: List[str] = []
     for i, r in enumerate(results, 1):
-        head = "[%d] %s  %s" % (i, r.target, r.sapi)
+        head = "[%d] %s  %s" % (i, s(r.target), s(r.sapi))
         if r.path:
-            head += "  " + r.path
+            head += "  " + s(r.path)
         out.append(head)
         if r.error:
-            out.append("    error: " + r.error)
+            out.append("    error: " + s(r.error))
         if r.affected_by:
-            out.append("    affected by: " + ", ".join(r.affected_by))
+            out.append("    affected by: " + ", ".join(s(a) for a in r.affected_by))
         if r.settings:
-            out.append("    settings: " + short_settings(r.settings))
+            out.append("    settings: " + s(short_settings(r.settings)))
         if r.settings or r.mitigations_in_place or r.mitigation_gaps:
             for label, items in (("in place", r.mitigations_in_place), ("gaps", r.mitigation_gaps)):
                 if not items:
                     out.append("    %s: none" % label)
                     continue
                 out.append("    %s:" % label)
-                out.extend("      - " + i for i in items)
+                out.extend("      - " + s(i) for i in items)
         for e in r.evidence:
-            out.append("    evidence: " + e)
+            out.append("    evidence: " + s(e))
         for f in r.findings:
-            out.append("    finding: " + f)
+            out.append("    finding: " + s(f))
         for n in r.notes:
-            out.append("    note: " + n)
+            out.append("    note: " + s(n))
     return "\n".join(out)
 
 
-def render_text(results: Sequence[Result], mode: str) -> str:
+def render_run_info(run: Optional[RunInfo], mode: str) -> List[str]:
+    """The scope block printed under the report header for remote and fleet runs."""
+    if run is None or mode not in SCOPED_MODES:
+        return []
+    lines = ["Scope: %s" % (", ".join(safe_text(e) for e in run.scope) if run.scope else "none")]
+    if run.refused:
+        lines.append("Confirmation: not given (%s). Nothing was sent to any target." % safe_text(run.refused))
+    else:
+        lines.append("Confirmation: %s" % safe_text(run.confirmation or "none"))
+    if run.out_of_scope:
+        lines.append("Out of scope, not checked (%d):" % len(run.out_of_scope))
+        for item in run.out_of_scope:
+            ips = ", ".join(safe_text(ip) for ip in item.get("ips", [])) or "did not resolve"
+            lines.append("  %s -> %s (%s)" % (safe_text(item.get("target")), safe_text(item.get("host")), ips))
+    return lines
+
+
+def render_text(results: Sequence[Result], mode: str, run: Optional[RunInfo] = None) -> str:
     ids = ", ".join("%s (%s)" % (a.cve, a.ghsa) for a in ADVISORIES)
-    parts = ["atarus-phpcheck %s  mode=%s  checks: %s" % (__version__, mode, ids), ""]
+    parts = ["atarus-phpcheck %s  mode=%s  checks: %s" % (__version__, mode, ids)]
+    parts.extend(render_run_info(run, mode))
+    parts.append("")
     if not results:
         parts.append("Nothing was checked.")
         return "\n".join(parts) + "\n"
@@ -134,16 +160,24 @@ def render_explain() -> str:
 
 
 def render_json(results: Sequence[Result], mode: str, include_explain: bool = False,
-                now: Optional[datetime] = None) -> str:
+                now: Optional[datetime] = None, run: Optional[RunInfo] = None) -> str:
+    """JSON output. json.dumps escapes every control character (\\u001b and so
+    on) and every non-ASCII character, so the document itself is safe to print;
+    the values inside were already cleaned by safe_text when collected."""
     doc = {
         "tool": "atarus-phpcheck",
         "version": __version__,
         "mode": mode,
         "generated_at": (now or datetime.now(timezone.utc)).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "advisories": [{"cve": a.cve, "ghsa": a.ghsa} for a in ADVISORIES],
-        "summary": summary(results),
-        "results": [r.to_dict() for r in results],
     }
+    if mode in SCOPED_MODES:
+        doc["scope"] = list(run.scope) if run and run.scope else None
+        doc["confirmation"] = run.confirmation if run else None
+        doc["refused"] = run.refused if run else None
+        doc["out_of_scope"] = list(run.out_of_scope) if run else []
+    doc["summary"] = summary(results)
+    doc["results"] = [r.to_dict() for r in results]
     if mode == "remote":
         doc["note"] = NO_BANNER_NOTE
     if include_explain:

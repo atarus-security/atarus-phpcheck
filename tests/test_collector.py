@@ -94,5 +94,30 @@ class RunCollector(unittest.TestCase):
             shutil.rmtree(d)
 
 
+class HostileInventory(unittest.TestCase):
+    """Everything the inventory script prints comes from the target host."""
+
+    def test_control_characters_are_escaped_on_every_line(self):
+        text = ("@@PHPCHECK 1\n@@HOST web\x1b[2J01\n@@BIN cli /usr/bin/php\x1b]0;owned\x07\n@@V\n"
+                "PHP 8.2.28\x1b[31m (cli) (built: x) (NTS)\n@@INFO\nphp.version=8.2.28\nphp.sapi=cli\n"
+                "ini.memory_limit=128M\x07\n@@END\n@@APACHE_CONF /etc/apache2/mods-enabled/php8.2.load\x1b[0m\n@@DONE\n")
+        inv = parse_output(text)
+        self.assertTrue(inv.complete)
+        self.assertEqual(inv.reported_host, "web\\x1b[2J01")
+        results = results_from_inventory(inv, "web-01", "fleet")
+        self.assertEqual(len(results), 1)
+        r = results[0]
+        self.assertEqual(r.version, "8.2.28")
+        self.assertEqual(r.path, "/usr/bin/php\\x1b]0;owned\\x07")
+        self.assertEqual(r.settings["memory_limit"], "128M\\x07")
+        everything = "\n".join([r.path or "", r.version or ""] + r.notes + r.evidence + list(r.settings.values()) + inv.apache_confs)
+        self.assertNotIn("\x1b", everything)
+        self.assertNotIn("\x07", everything)
+
+    def test_php_v_with_escape(self):
+        self.assertEqual(version_from_php_v("PHP 8.1.2\x1b[0m (cli) (built: x)"), "8.1.2")
+        self.assertEqual(version_from_php_v("PHP 8.1.2-1ubuntu2.20 (cli) (built: x)"), "8.1.2-1ubuntu2.20")
+
+
 if __name__ == "__main__":
     unittest.main()

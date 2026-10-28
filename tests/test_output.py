@@ -2,8 +2,8 @@ import json
 import unittest
 from datetime import datetime, timezone
 
-from phpcheck.model import NOT_FOUND, build_result
-from phpcheck.report import render_explain, render_json, render_table, render_text, summary
+from phpcheck.model import NOT_FOUND, RunInfo, build_result
+from phpcheck.report import render_explain, render_json, render_run_info, render_table, render_text, summary
 
 
 def sample():
@@ -78,6 +78,90 @@ class Summary(unittest.TestCase):
     def test_counts(self):
         s = summary(sample())
         self.assertEqual((s["checked"], s["fixed"], s[NOT_FOUND]), (4, 1, 1))
+
+
+class RunInfoBlock(unittest.TestCase):
+    def run_info(self):
+        return RunInfo(scope=["*.example.com", "203.0.113.0/24"], confirmation="typed yes on the terminal",
+                       out_of_scope=[{"target": "https://cdn.example.net", "host": "cdn.example.net", "ips": ["198.51.100.4"]},
+                                     {"target": "web-02", "host": "web-02", "ips": []}])
+
+    def test_text_block(self):
+        lines = render_run_info(self.run_info(), "remote")
+        self.assertEqual(lines, [
+            "Scope: *.example.com, 203.0.113.0/24",
+            "Confirmation: typed yes on the terminal",
+            "Out of scope, not checked (2):",
+            "  https://cdn.example.net -> cdn.example.net (198.51.100.4)",
+            "  web-02 -> web-02 (did not resolve)",
+        ])
+
+    def test_refused(self):
+        lines = render_run_info(RunInfo(scope=["a.example.com"], refused="confirmation not given on the terminal"), "fleet")
+        self.assertEqual(lines[1], "Confirmation: not given (confirmation not given on the terminal). Nothing was sent to any target.")
+
+    def test_only_for_scoped_modes(self):
+        self.assertEqual(render_run_info(self.run_info(), "local"), [])
+        self.assertEqual(render_run_info(None, "remote"), [])
+        self.assertNotIn("scope", json.loads(render_json(sample(), "image")))
+
+    def test_json_fields(self):
+        doc = json.loads(render_json([], "fleet", run=self.run_info()))
+        self.assertEqual(doc["scope"], ["*.example.com", "203.0.113.0/24"])
+        self.assertEqual(doc["confirmation"], "typed yes on the terminal")
+        self.assertIsNone(doc["refused"])
+        self.assertEqual(len(doc["out_of_scope"]), 2)
+        # Keys come before the results so a reader sees the authorisation first.
+        keys = list(doc)
+        self.assertLess(keys.index("scope"), keys.index("results"))
+
+    def test_json_without_run(self):
+        doc = json.loads(render_json([], "remote"))
+        self.assertIsNone(doc["scope"])
+        self.assertIsNone(doc["confirmation"])
+        self.assertEqual(doc["out_of_scope"], [])
+
+
+class NoControlCharacters(unittest.TestCase):
+    """Whatever a target put in a result, the rendered text is inert."""
+
+    def hostile(self):
+        r = build_result("web-\x1b[31m01", "fleet", "8.2.28\x07", sapi="fpm\x1b[2J", path="/usr/bin/php\u202e")
+        r.error = "ssh failed: \x1b]0;owned\x07"
+        r.evidence = ["Server: nginx\x1b[2J"]
+        r.findings = ["HEAD /info.php\r\n returned 200"]
+        r.notes = ["banner\x9b"]
+        r.settings = {"memory_limit": "128M\x1b[0m"}
+        r.mitigation_gaps = ["gap\x07"]
+        r.mitigations_in_place = ["ok\x1b"]
+        return r
+
+    def assert_inert(self, text):
+        for ch in text:
+            if ch == "\n":
+                continue
+            self.assertGreaterEqual(ord(ch), 0x20, repr(text))
+            self.assertNotEqual(ord(ch), 0x7F)
+            self.assertNotIn(ch, "\u202e\u2028\u2029")
+
+    def test_text_report(self):
+        out = render_text([self.hostile()], "fleet", run=RunInfo(scope=["web-\x1b[31m01"], confirmation="typed yes\x07",
+                                                                 out_of_scope=[{"target": "x\x1b", "host": "x\x1b", "ips": ["1.2.3.4\x1b"]}]))
+        self.assert_inert(out)
+        self.assertIn("\\x1b[31m01", out)
+        self.assertIn("\\u202e", out)
+
+    def test_table(self):
+        out = render_table([self.hostile()])
+        self.assert_inert(out)
+
+    def test_json_is_escaped(self):
+        # Raw control characters planted straight into a result (bypassing
+        # collection) still cannot reach the output: json.dumps escapes them.
+        out = render_json([self.hostile()], "fleet")
+        self.assert_inert(out)
+        self.assertIn("\\u001b[31m01", out)
+        self.assertIn("\\u202e", out)
 
 
 if __name__ == "__main__":

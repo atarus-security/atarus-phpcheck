@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 from .model import Result, build_result
+from .scope import safe_text
 from .settings import (
     PROBE_PHP,
     SETTINGS_KEYS,
@@ -132,14 +133,16 @@ SCRIPT = (
     .replace("@POOL_GREP@", _POOL_GREP)
 )
 
-_PHP_V_RE = re.compile(r"^PHP (\d\S*) \(", re.M)
+# The version token on the first line of `php -v`: digits, letters, dots and
+# the vendor suffix characters, nothing else. A control character ends it.
+_PHP_V_RE = re.compile(r"^PHP (\d[0-9A-Za-z.~+:-]*)", re.M)
 _XPB_RE = re.compile(r"X-Powered-By: PHP/(\S+)")
 _LIBPHP_RE = re.compile(r"libphp(\d+(?:\.\d+)?)")
 
 
 def version_from_php_v(text: str) -> Optional[str]:
     m = _PHP_V_RE.search(text or "")
-    return m.group(1) if m else None
+    return safe_text(m.group(1)) if m else None
 
 
 @dataclass
@@ -161,11 +164,15 @@ class Inventory:
 
 
 def parse_output(text: str) -> Inventory:
+    """Parse the inventory script's output. Every line comes from the target
+    (its shell, its php binaries, its config files), so each one goes through
+    safe_text before anything is kept."""
     inv = Inventory()
     block: Optional[_Block] = None
     pool_blocks: List[_Block] = []
     section = "body"
-    for line in text.splitlines():
+    for raw_line in (text or "").splitlines():
+        line = safe_text(raw_line)
         if line.startswith("@@"):
             tag, _, rest = line[2:].partition(" ")
             if tag == "HOST":
@@ -216,7 +223,7 @@ def results_from_inventory(inv: Inventory, target: str, mode: str) -> List[Resul
         pools = _pools_for(build_result(target, mode, version).branch, inv.pools) if sapi == "fpm" else []
         notes = []
         if not version:
-            notes.append("binary did not report a version: %s" % (vtext.strip().splitlines() or ["no output"])[0][:120])
+            notes.append("binary did not report a version: %s" % safe_text((vtext.strip().splitlines() or ["no output"])[0], 120))
         results.append(build_result(target, mode, version, sapi=sapi, path=path,
                                     settings=data.settings, pools=pools, notes=notes))
 
